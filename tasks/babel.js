@@ -1,33 +1,35 @@
 'use strict';
 var path = require('path');
-var babel = require('babel-core');
+var child_process = require('child_process');
+var extend = require('util')._extend;
 
 module.exports = function (grunt) {
 	grunt.registerMultiTask('babel', 'Transpile ES6 to ES5', function () {
 		var options = this.options();
+		var async = this.async();
 
-		this.files.forEach(function (el) {
-			delete options.filename;
-			delete options.filenameRelative;
+		var fileQueue = this.files;
 
-			options.sourceFileName = path.relative(path.dirname(el.dest), el.src[0]);
-			if (process.platform === 'win32') {
-				options.sourceFileName = options.sourceFileName.replace(/\\/g, '/');
-			}
-			options.sourceMapTarget = path.basename(el.dest);
+		var workerCount = 8;
 
-			var res = babel.transformFileSync(el.src[0], options);
-
-			var sourceMappingURL = '';
-			if (res.map) {
-				sourceMappingURL = '\n//# sourceMappingURL=' + path.basename(el.dest) + '.map';
-			}
-
-			grunt.file.write(el.dest, res.code + sourceMappingURL + '\n');
-
-			if (res.map) {
-				grunt.file.write(el.dest + '.map', JSON.stringify(res.map));
-			}
-		});
+		for (var i = 0; i < workerCount; i++) {
+			var child = child_process.fork(path.join(__dirname, '../babel-worker'));
+			child.on('message', function (message) {
+				if (message != 'ok') {
+					return;
+				}
+				var next = fileQueue.shift();
+				if (next) {
+					child.send(extend({el: {src: next.src[0], dest: next.dest}}, options));
+				} else {
+					workerCount--;
+					if (!workerCount) {
+						async();
+					}
+					child.send(null);
+				}
+			});
+		}
 	});
 };
+// kate: tab-indents on; space-indent off; indent-width 4;
